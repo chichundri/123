@@ -1,0 +1,295 @@
+---------------------------------------
+
+@Configuration
+@Import({PersistenceConfig.class})
+@ComponentScan(basePackageClasses = { 
+    ServiceMarker.class,
+    RepositoryMarker.class }
+)
+public class AppConfig {
+
+}
+---------------------------------------
+PersistenceConfig
+
+@Configuration
+@PropertySource(value = { "classpath:database/jdbc.properties" })
+@EnableTransactionManagement
+public class PersistenceConfig {
+
+    private static final String PROPERTY_NAME_HIBERNATE_DIALECT = "hibernate.dialect";
+    private static final String PROPERTY_NAME_HIBERNATE_MAX_FETCH_DEPTH = "hibernate.max_fetch_depth";
+    private static final String PROPERTY_NAME_HIBERNATE_JDBC_FETCH_SIZE = "hibernate.jdbc.fetch_size";
+    private static final String PROPERTY_NAME_HIBERNATE_JDBC_BATCH_SIZE = "hibernate.jdbc.batch_size";
+    private static final String PROPERTY_NAME_HIBERNATE_SHOW_SQL = "hibernate.show_sql";
+    private static final String[] ENTITYMANAGER_PACKAGES_TO_SCAN = {"a.b.c.entities", "a.b.c.converters"};
+
+    @Autowired
+    private Environment env;
+
+     @Bean(destroyMethod = "close")
+     public DataSource dataSource() {
+         BasicDataSource dataSource = new BasicDataSource();
+         dataSource.setDriverClassName(env.getProperty("jdbc.driverClassName"));
+         dataSource.setUrl(env.getProperty("jdbc.url"));
+         dataSource.setUsername(env.getProperty("jdbc.username"));
+         dataSource.setPassword(env.getProperty("jdbc.password"));
+         return dataSource;
+     }
+
+     @Bean
+     public JpaTransactionManager jpaTransactionManager() {
+         JpaTransactionManager transactionManager = new JpaTransactionManager();
+         transactionManager.setEntityManagerFactory(entityManagerFactoryBean().getObject());
+         return transactionManager;
+     }
+
+    private HibernateJpaVendorAdapter vendorAdaptor() {
+         HibernateJpaVendorAdapter vendorAdapter = new HibernateJpaVendorAdapter();
+         vendorAdapter.setShowSql(true);
+         return vendorAdapter;
+    }
+
+    @Bean
+    public LocalContainerEntityManagerFactoryBean entityManagerFactoryBean() {
+
+         LocalContainerEntityManagerFactoryBean entityManagerFactoryBean = new LocalContainerEntityManagerFactoryBean();
+         entityManagerFactoryBean.setJpaVendorAdapter(vendorAdaptor());
+         entityManagerFactoryBean.setDataSource(dataSource());
+         entityManagerFactoryBean.setPersistenceProviderClass(HibernatePersistenceProvider.class);
+         entityManagerFactoryBean.setPackagesToScan(ENTITYMANAGER_PACKAGES_TO_SCAN);             
+         entityManagerFactoryBean.setJpaProperties(jpaHibernateProperties());
+
+         return entityManagerFactoryBean;
+     }
+
+     private Properties jpaHibernateProperties() {
+
+         Properties properties = new Properties();
+
+         properties.put(PROPERTY_NAME_HIBERNATE_MAX_FETCH_DEPTH, env.getProperty(PROPERTY_NAME_HIBERNATE_MAX_FETCH_DEPTH));
+         properties.put(PROPERTY_NAME_HIBERNATE_JDBC_FETCH_SIZE, env.getProperty(PROPERTY_NAME_HIBERNATE_JDBC_FETCH_SIZE));
+         properties.put(PROPERTY_NAME_HIBERNATE_JDBC_BATCH_SIZE, env.getProperty(PROPERTY_NAME_HIBERNATE_JDBC_BATCH_SIZE));
+         properties.put(PROPERTY_NAME_HIBERNATE_SHOW_SQL, env.getProperty(PROPERTY_NAME_HIBERNATE_SHOW_SQL));
+
+         properties.put(AvailableSettings.SCHEMA_GEN_DATABASE_ACTION, "none");
+         properties.put(AvailableSettings.USE_CLASS_ENHANCER, "false");      
+         return properties;       
+     }
+
+}
+
+---------------------------------------
+Main
+
+public static void main(String[] args) { 
+    try (GenericApplicationContext springContext = new AnnotationConfigApplicationContext(AppConfig.class)) {
+        MyService myService = springContext.getBean(MyServiceImpl.class);
+        try {
+            myService.handleProcess(fromDate, toDate);
+        } catch (Exception e) {
+            logger.error("Exception occurs", e);
+            myService.handleException(fromDate, toDate, e);
+        }
+    } catch (Exception e) {
+        logger.error("Exception occurs in loading Spring context: ", e);
+    }
+}
+
+---------------------------------------
+MyService
+
+@Service
+public class MyServiceImpl implements MyService {
+
+    @Inject
+    private MyDao myDao;
+
+    @Override
+    public void handleProcess(String fromDate, String toDate) {
+        List<Student> myList = myDao.select(fromDate, toDate);
+    }
+}
+
+---------------------------------------
+MyDoaImpl
+
+@Repository
+@Transactional
+public class MyDaoImpl implements MyDao {
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    public Student select(String fromDate, String toDate){
+
+        TypedQuery<Student> query = entityManager.createNamedQuery("Student.findByKey", Student.class);
+        query.setParameter("fromDate", fromDate);
+        query.setParameter("toDate", toDate);
+        List<Student> list = query.getResultList();
+        return CollectionUtils.isEmpty(list) ? null : list;
+    }
+
+}
+---------------------------------------
+Assuming maven project: Properties file should be in src/main/recourses/database folder
+
+jdbc.properties file
+
+jdbc.driverClassName=com.mysql.jdbc.Driver
+jdbc.url=your db url
+jdbc.username=your Username
+jdbc.password=Your password
+
+hibernate.max_fetch_depth = 3
+hibernate.jdbc.fetch_size = 50
+hibernate.jdbc.batch_size = 10
+hibernate.show_sql = true
+
+---------------------------------------
+ServiceMarker and RepositoryMarker are just empty interfaces in your service or repository impl package.
+
+Let say you have package name a.b.c.service.impl. MyServiceImpl is in this package and also ServiceMarker.
+
+public interface ServiceMarker {
+
+}
+
+Same for repory marker. Let say you have a.b.c.repository.impl or a.b.c.dao.impl package name. Then MyDaoImpl is in this this package and also Repositorymarker
+
+public interface RepositoryMarker {
+
+}
+
+---------------------------------------
+a.b.c.entities.Student
+
+//dummy class and dummy query
+@Entity
+@NamedQueries({
+@NamedQuery(name="Student.findByKey", query="select s from Student s where s.fromDate=:fromDate" and s.toDate = :toDate)
+})
+public class Student implements Serializable {
+
+    private LocalDateTime fromDate;
+    private LocalDateTime toDate;
+
+    //getters setters
+
+}
+
+---------------------------------------
+a.b.c.converters
+
+@Converter(autoApply = true)
+public class LocalDateTimeConverter implements AttributeConverter<LocalDateTime, Timestamp> {
+
+    @Override
+    public Timestamp convertToDatabaseColumn(LocalDateTime dateTime) {
+
+        if (dateTime == null) {
+            return null;
+        }
+        return Timestamp.valueOf(dateTime);
+    }
+
+    @Override
+    public LocalDateTime convertToEntityAttribute(Timestamp timestamp) {
+
+        if (timestamp == null) {
+            return null;
+        }    
+        return timestamp.toLocalDateTime();
+    }
+}
+
+---------------------------------------
+pom.xml
+
+<properties>
+    <java-version>1.8</java-version>
+    <org.springframework-version>4.2.1.RELEASE</org.springframework-version>
+    <hibernate-entitymanager.version>5.0.2.Final</hibernate-entitymanager.version>
+    <commons-dbcp2.version>2.1.1</commons-dbcp2.version>
+    <mysql-connector-java.version>5.1.36</mysql-connector-java.version>
+     <junit.version>4.12</junit.version> 
+</properties>
+
+<dependencies>
+    <dependency>
+        <groupId>junit</groupId>
+        <artifactId>junit</artifactId>
+        <version>${junit.version}</version>
+        <scope>test</scope>
+    </dependency>
+
+    <!-- Spring -->
+    <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-context</artifactId>
+        <version>${org.springframework.version}</version>
+    </dependency>
+
+    <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-jdbc</artifactId>
+        <version>${org.springframework.version}</version>
+    </dependency>
+
+    <dependency>
+        <groupId>javax.inject</groupId>
+        <artifactId>javax.inject</artifactId>
+        <version>1</version>
+        <scope>compile</scope>
+    </dependency>
+
+    <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-tx</artifactId>
+        <version>${org.springframework-version}</version>
+    </dependency>
+
+    <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-orm</artifactId>
+        <version>${org.springframework-version}</version>
+    </dependency>
+
+    <dependency>
+        <groupId>org.hibernate</groupId>
+        <artifactId>hibernate-entitymanager</artifactId>
+        <version>${hibernate-entitymanager.version}</version>
+    </dependency>
+
+    <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+        <version>${mysql-connector-java.version}</version>
+    </dependency>
+
+    <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-dbcp2</artifactId>
+        <version>${commons-dbcp2.version}</version>
+    </dependency>
+</dependencies>
+
+<build>
+     <finalName>${project.artifactId}</finalName>
+     <plugins>
+         <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <version>3.3</version>
+            <configuration>
+                <source>${java-version}</source>
+                <target>${java-version}</target>
+                <compilerArgument>-Xlint:all</compilerArgument>
+                <showWarnings>true</showWarnings>
+                <showDeprecation>true</showDeprecation>
+            </configuration>
+        </plugin>
+     </plugins>
+</build>
+
+Hope it helps. Thanks
